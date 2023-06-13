@@ -748,7 +748,10 @@ PYBIND11_MODULE(rmf_adapter, m) {
         std::string& finishing_request_string,
         std::optional<std::string> server_uri,
         rmf_traffic::Duration max_delay,
-        rmf_traffic::Duration update_interval)
+        rmf_traffic::Duration update_interval,
+        double max_merge_waypoint_distance,
+        double max_merge_lane_distance,
+        double min_lane_length)
         {
           rmf_task::ConstRequestFactoryPtr finishing_request;
           if (finishing_request_string == "charge")
@@ -781,7 +784,10 @@ PYBIND11_MODULE(rmf_adapter, m) {
               finishing_request,
               server_uri,
               max_delay,
-              update_interval);
+              update_interval,
+              max_merge_waypoint_distance,
+              max_merge_lane_distance,
+              min_lane_length);
         }
         ),
     py::arg("fleet_name"),
@@ -799,7 +805,10 @@ PYBIND11_MODULE(rmf_adapter, m) {
     py::arg("finishing_request") = "nothing",
     py::arg("server_uri") = std::nullopt,
     py::arg("max_delay") = rmf_traffic::time::from_seconds(10.0),
-    py::arg("update_interval") = rmf_traffic::time::from_seconds(0.5))
+    py::arg("update_interval") = rmf_traffic::time::from_seconds(0.5),
+    py::arg("max_merge_waypoint_distance") = 0.3,
+    py::arg("max_merge_lane_distance") = 0.1,
+    py::arg("min_lane_length") = 1e-8)
   .def_static("make_simple", [&](
     const std::string& config_file,
     const std::string& nav_graph_path,
@@ -825,7 +834,10 @@ PYBIND11_MODULE(rmf_adapter, m) {
   .def("finishing_request", &agv::EasyFullControl::Configuration::finishing_request)
   .def("server_uri", &agv::EasyFullControl::Configuration::server_uri)
   .def("max_delay", &agv::EasyFullControl::Configuration::max_delay)
-  .def("update_interval", &agv::EasyFullControl::Configuration::update_interval);
+  .def("update_interval", &agv::EasyFullControl::Configuration::update_interval)
+  .def("max_merge_waypoint_distance", &agv::EasyFullControl::Configuration::max_merge_waypoint_distance)
+  .def("max_merge_lane_distance", &agv::EasyFullControl::Configuration::max_merge_lane_distance)
+  .def("min_lane_length", &agv::EasyFullControl::Configuration::min_lane_length);
       /*
   .def_property("fleet_name",
     py::overload_cast<>(&agv::Configuration::fleet_name, py::const_),

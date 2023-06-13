@@ -1091,6 +1091,9 @@ public:
   std::optional<std::string> server_uri;
   rmf_traffic::Duration max_delay;
   rmf_traffic::Duration update_interval;
+  double max_merge_waypoint_distance;
+  double max_merge_lane_distance;
+  double min_lane_length;
 };
 
 //==============================================================================
@@ -1110,7 +1113,10 @@ EasyFullControl::Configuration::Configuration(
   rmf_task::ConstRequestFactoryPtr finishing_request,
   std::optional<std::string> server_uri,
   rmf_traffic::Duration max_delay,
-  rmf_traffic::Duration update_interval)
+  rmf_traffic::Duration update_interval,
+  double max_merge_waypoint_distance,
+  double max_merge_lane_distance,
+  double min_lane_length)
 : _pimpl(rmf_utils::make_impl<Implementation>(
       Implementation{
         std::move(fleet_name),
@@ -1128,7 +1134,10 @@ EasyFullControl::Configuration::Configuration(
         std::move(finishing_request),
         std::move(server_uri),
         std::move(max_delay),
-        std::move(update_interval)
+        std::move(update_interval),
+        std::move(max_merge_waypoint_distance),
+        std::move(max_merge_lane_distance),
+        std::move(min_lane_length)
       }))
 {
   // Do nothing
@@ -1450,6 +1459,43 @@ EasyFullControl::Configuration::make_simple(
     max_delay = rmf_fleet["max_delay"].as<double>();
   }
 
+  // Set max merge waypoint distance
+  double max_merge_waypoint_distance = 0.3;
+  if (!rmf_fleet["max_merge_waypoint_distance"])
+  {
+    std::cout <<
+      "Maximum merge waypoint distance is not provided, default to 0.3" <<
+      std::endl;
+  }
+  else
+  {
+    max_merge_waypoint_distance =
+      rmf_fleet["max_merge_waypoint_distance"].as<double>();
+  }
+  // Set max merge lane distance
+  double max_merge_lane_distance = 0.1;
+  if (!rmf_fleet["max_merge_lane_distance"])
+  {
+    std::cout <<
+      "Maximum merge lane distance is not provided, default to 0.1" <<
+      std::endl;
+  }
+  else
+  {
+    max_merge_lane_distance = rmf_fleet["max_merge_lane_distance"].as<double>();
+  }
+  // Set min lane length
+  double min_lane_length = 1e-8;
+  if (!rmf_fleet["min_lane_length"])
+  {
+    std::cout << "Minimum lane length is not provided, default to 1e-8" <<
+      std::endl;
+  }
+  else
+  {
+    min_lane_length = rmf_fleet["min_lane_length"].as<double>();
+  }
+
   return std::make_shared<Configuration>(
     fleet_name,
     std::move(traits),
@@ -1466,7 +1512,10 @@ EasyFullControl::Configuration::make_simple(
     finishing_request,
     server_uri,
     rmf_traffic::time::from_seconds(max_delay),
-    rmf_traffic::time::from_seconds(update_interval));
+    rmf_traffic::time::from_seconds(update_interval),
+    max_merge_waypoint_distance,
+    max_merge_lane_distance,
+    min_lane_length);
 }
 
 //==============================================================================
@@ -1555,6 +1604,24 @@ rmf_traffic::Duration EasyFullControl::Configuration::max_delay() const
 rmf_traffic::Duration EasyFullControl::Configuration::update_interval() const
 {
   return _pimpl->update_interval;
+}
+
+//==============================================================================
+double EasyFullControl::Configuration::max_merge_waypoint_distance() const
+{
+  return _pimpl->max_merge_waypoint_distance;
+}
+
+//==============================================================================
+double EasyFullControl::Configuration::max_merge_lane_distance() const
+{
+  return _pimpl->max_merge_lane_distance;
+}
+
+//==============================================================================
+double EasyFullControl::Configuration::min_lane_length() const
+{
+  return _pimpl->min_lane_length;
 }
 
 //==============================================================================
@@ -1878,6 +1945,13 @@ std::shared_ptr<EasyFullControl> EasyFullControl::make(
           finishing_request_string.c_str());
       }
 
+      const double max_merge_waypoint_distance = node->declare_parameter(
+        "max_merge_waypoint_distance", 0.3);
+      const double max_merge_lane_distance = node->declare_parameter(
+        "max_merge_lane_distance", 0.1);
+      const double min_lane_length = node->declare_parameter(
+        "min_lane_length", 1e-8);
+
       auto config = std::make_shared<Configuration>(
         fleet_name,
         std::move(traits),
@@ -1894,7 +1968,10 @@ std::shared_ptr<EasyFullControl> EasyFullControl::make(
         finishing_request,
         server_uri,
         rmf_traffic::time::from_seconds(max_delay),
-        rmf_traffic::time::from_seconds(update_interval));
+        rmf_traffic::time::from_seconds(update_interval),
+        max_merge_waypoint_distance,
+        max_merge_lane_distance,
+        min_lane_length);
 
       return config;
     };
@@ -1917,6 +1994,11 @@ std::shared_ptr<EasyFullControl> EasyFullControl::make(
   auto config = config_.has_value() ? config_.value() : *config_from_params;
   easy_adapter->_pimpl->fleet_name = config.fleet_name();
   easy_adapter->_pimpl->update_interval = config.update_interval();
+  easy_adapter->_pimpl->max_merge_waypoint_distance =
+    config.max_merge_waypoint_distance();
+  easy_adapter->_pimpl->max_merge_lane_distance =
+    config.max_merge_lane_distance();
+  easy_adapter->_pimpl->min_lane_length = config.min_lane_length();
   easy_adapter->_pimpl->traits = std::make_shared<VehicleTraits>(
     config.vehicle_traits());
   easy_adapter->_pimpl->graph = std::make_shared<Graph>(config.graph());
@@ -2132,8 +2214,8 @@ auto EasyFullControl::add_robot(
     std::move(handle_dock),
     std::move(action_executor),
     _pimpl->max_merge_waypoint_distance,
-    _pimpl-> max_merge_lane_distance,
-    _pimpl-> min_lane_length,
+    _pimpl->max_merge_lane_distance,
+    _pimpl->min_lane_length,
     _pimpl->update_interval
   );
 

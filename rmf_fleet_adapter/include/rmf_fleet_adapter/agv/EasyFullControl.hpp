@@ -127,6 +127,17 @@ public:
     /// \param[in] update_interval
     ///   The duration between positional state updates that are sent to
     ///   the fleet adapter.
+    ///
+    /// \param[in] max_merge_waypoint_distance
+    ///   The maximum distance between the robot and a waypoint to consider the
+    ///   robot to be positioned at that waypoint.
+    ///
+    /// \param[in] max_merge_lane_distance
+    ///   The maximum distance between the robot and a lane to consider the
+    ///   robot to be positioned on that lane.
+    ///
+    /// \param[in] min_lane_length
+    ///   The minimum length required for a lane in a navigation graph.
     Configuration(
       const std::string& fleet_name,
       rmf_traffic::agv::VehicleTraits traits,
@@ -144,7 +155,10 @@ public:
       std::optional<std::string> server_uri = std::nullopt,
       rmf_traffic::Duration max_delay = rmf_traffic::time::from_seconds(10.0),
       rmf_traffic::Duration update_interval = rmf_traffic::time::from_seconds(
-        0.5)
+        0.5),
+      double max_merge_waypoint_distance = 0.3,
+      double max_merge_lane_distance = 0.1,
+      double min_lane_length = 1e-8
     );
 
     /// Create a Configuration object using a set of configuration parameters
@@ -223,6 +237,15 @@ public:
 
     /// Get the update interval.
     rmf_traffic::Duration update_interval() const;
+
+    /// Get the max merge waypoint distance.
+    double max_merge_waypoint_distance() const;
+
+    /// Get the max merge lane distance.
+    double max_merge_lane_distance() const;
+
+    /// Get the min lane length.
+    double min_lane_length() const;
 
     class Implementation;
   private:
