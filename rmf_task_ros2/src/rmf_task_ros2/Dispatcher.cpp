@@ -34,6 +34,7 @@
 #include <rmf_task_msgs/msg/tasks.hpp>
 #include <rmf_task_msgs/msg/api_request.hpp>
 #include <rmf_task_msgs/msg/api_response.hpp>
+#include <rmf_fleet_msgs/msg/fleet_state.hpp>
 
 #include <rmf_traffic_ros2/Time.hpp>
 
@@ -118,9 +119,14 @@ public:
   rclcpp::Service<GetDispatchStatesSrv>::SharedPtr get_dispatch_states_srv;
 
   using ApiRequestMsg = rmf_task_msgs::msg::ApiRequest;
+  using FleetStateMsg = rmf_fleet_msgs::msg::FleetState;
   using ApiResponseMsg = rmf_task_msgs::msg::ApiResponse;
   rclcpp::Subscription<ApiRequestMsg>::SharedPtr api_request;
   rclcpp::Publisher<ApiResponseMsg>::SharedPtr api_response;
+  rclcpp::Publisher<ApiRequestMsg>::SharedPtr api_request_pub;
+  rclcpp::Subscription<FleetStateMsg>::SharedPtr fleet_state_sub;
+
+
 
   class ApiMemory
   {
@@ -159,6 +165,9 @@ public:
   using DispatchStatesPub = rclcpp::Publisher<DispatchStatesMsg>;
   DispatchStatesPub::SharedPtr dispatch_states_pub;
   rclcpp::TimerBase::SharedPtr dispatch_states_pub_timer;
+  rclcpp::TimerBase::SharedPtr reauctionner_timer;
+  std::unordered_map<std::string, TaskID> running_tasks;
+  std::list<std::string> past_tasks;
 
   uint64_t next_dispatch_command_id = 0;
   std::unordered_map<uint64_t, DispatchCommandMsg> lingering_commands;
@@ -176,6 +185,8 @@ public:
   std::size_t terminated_tasks_max_size;
   int publish_active_tasks_period;
   bool use_timestamp_for_task_id;
+  bool reauction_tasks;
+  int reauction_tasks_frequency;
 
   std::unordered_map<std::size_t, std::string> legacy_task_type_names =
   {
@@ -216,6 +227,19 @@ public:
       " Use timestamp with task_id: %s",
       (use_timestamp_for_task_id ? "true" : "false"));
 
+    reauction_tasks =
+        node->declare_parameter<bool>("reauction_tasks", true);
+    RCLCPP_INFO(node->get_logger(),
+                "Reauction tasks: %s",
+                (reauction_tasks ? "true" : "false"));
+
+    if (reauction_tasks)
+    {
+      reauction_tasks_frequency = node->declare_parameter<int>("reauction_tasks_frequency", 10);
+      RCLCPP_INFO(node->get_logger(),
+                  " Reauction tasks frequency: %i", reauction_tasks_frequency);
+    }
+
     std::optional<std::string> server_uri = std::nullopt;
     const std::string uri =
       node->declare_parameter("server_uri", std::string());
@@ -245,6 +269,40 @@ public:
       "task_api_responses",
       rclcpp::SystemDefaultsQoS().reliable().transient_local());
 
+    api_request_pub = node->create_publisher<ApiRequestMsg>(
+        "task_api_requests",
+        rclcpp::SystemDefaultsQoS().reliable().transient_local());
+
+    fleet_state_sub = node->create_subscription<FleetStateMsg>(
+        "fleet_states",
+        rclcpp::SystemDefaultsQoS().reliable().transient_local(),
+        [this](const FleetStateMsg::UniquePtr msg)
+        {
+          for (auto robot : msg->robots)
+          {
+            if (running_tasks.count(robot.name) && robot.task_id == "")
+            {
+              if(running_tasks[robot.name] == ""){
+                continue;
+              }
+              RCLCPP_WARN(
+                  node->get_logger(),
+                  "---------------- TASK COMPLETED %s", running_tasks[robot.name].c_str());
+              running_tasks.erase(robot.name);
+              continue;
+            }
+            running_tasks[robot.name] = robot.task_id;
+            for(auto p: past_tasks){
+              if(p.compare((robot.task_id)) == 0){
+                return;
+              }
+            }
+            RCLCPP_WARN(
+                node->get_logger(),
+                "---------------- TASK ADDED %s", robot.task_id.c_str());
+            past_tasks.push_back(robot.task_id);
+          }
+        });
     // TODO(MXG): The smallest resolution this supports is 1 second. That
     // doesn't seem great.
     dispatch_states_pub_timer = node->create_wall_timer(
@@ -282,6 +340,21 @@ public:
         this->conclude_bid(task_id, std::move(winner), errors);
       },
       std::make_shared<bidding::QuickestFinishEvaluator>());
+
+    if (reauction_tasks)
+    {
+      if (reauction_tasks_frequency > 0)
+      {
+        reauctionner_timer = node->create_wall_timer(
+            std::chrono::seconds(reauction_tasks_frequency),
+            [this]()
+            { this->reauction(); });
+      }
+      else if (false)
+      {
+        // TODO event based reauction
+      } 
+    }
 
     // Setup up stream srv interfaces
     submit_task_srv = node->create_service<SubmitTaskSrv>(
@@ -881,6 +954,74 @@ public:
       rmf_task_msgs::build<DispatchStatesMsg>()
       .active(std::move(active))
       .finished(std::move(finished)));
+  }
+
+  void reauction()
+  {
+    RCLCPP_INFO(
+        node->get_logger(),
+        "[RE-AUCTIONING] Triggered");
+
+    for (std::pair<TaskID, DispatchStatePtr> dispatched_task : active_dispatch_states)
+    {
+
+      TaskID task_id = dispatched_task.second->task_id;
+      DispatchState::Status dispatch_state = dispatched_task.second->status;
+
+      for (auto task : running_tasks) // skip if task is already in progress
+      {
+        if (task.second.compare((task_id)) == 0)
+        {
+          RCLCPP_INFO(
+              node->get_logger(),
+              "[RE-AUCTIONING] Skipping %s .. running", task_id.c_str());
+          return;
+        }
+      }
+
+      bool finished = false;
+      for (std::string history : past_tasks) // skip if task has finished running
+      {
+        if (history.compare(task_id) == 0)
+        {
+                      
+          finished = true;
+          break;
+        }
+      }
+      if (finished)
+      {
+        RCLCPP_INFO(
+            node->get_logger(),
+            "[RE-AUCTIONING] Skipping %s .. finished", task_id.c_str());
+        continue;
+      }
+
+      if (dispatch_state != DispatchState::Status::Dispatched ) // skip if task has not been dispatched to fleet adapters
+      {
+        RCLCPP_INFO(
+            node->get_logger(),
+            "[RE-AUCTIONING] Skipping %s .. not dispatched yet: %u", task_id.c_str(), dispatch_state);
+        continue;
+      }
+
+      RCLCPP_INFO(
+          node->get_logger(),
+          "[RE-AUCTIONING] Cancelled already assigned task: %s", task_id.c_str());
+      nlohmann::json cancel_task_reqeust;
+      cancel_task_reqeust["task_id"] = task_id;
+      cancel_task_reqeust["type"] = "cancel_task_request";
+      api_request_pub->publish(rmf_task_msgs::build<ApiRequestMsg>().json_msg(cancel_task_reqeust.dump()).request_id(task_id));
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+      nlohmann::json bid_request = dispatched_task.second->request;
+
+      RCLCPP_INFO(
+          node->get_logger(),
+          "[RE-AUCTIONING] Re-auctioning task: %s", task_id.c_str());
+      push_bid_notice(rmf_task_msgs::build<bidding::BidNoticeMsg>().request(bid_request.dump()).task_id(task_id).time_window(bidding_time_window));
+    }
   }
 
   void publish_lingering_commands()
